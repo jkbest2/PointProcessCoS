@@ -1,8 +1,8 @@
 #include <TMB.hpp>
 
 // Construct the precision matrix for a stationary GMRF constructed using the
-// SPDE approximation from R-INLA. This is specific to a Matern with nu = 1
-// (alpha = 2).
+// SPDE approximation from R-INLA. This is specific to alpha = 2, which
+// corresponds to a Matern with nu = 1 in R^2
 template<class Type>
 Eigen::SparseMatrix<Type> Q_stat(Type tau, Type kappa2,
                                  Eigen::SparseMatrix<Type> C0,
@@ -58,14 +58,13 @@ Type objective_function<Type>::operator() ()
   nll(2) += gmrf(spat);
 
   // Calculate intensity function
-  vector<Type> log_lambda(A_full.rows());
-  Type lambda_full;
-  log_lambda = A * spat + mu;
-  // Is this string of operators a good idea?!?!
-  lambda = log_lambda.array().exp();
+  vector<Type> log_lambda_spat(N_cells);
+  log_lambda_spat = A * spat;
 
   // Likelihood of total count
+  vector<Type> lambda(N_cells);
   for(int i = 0; i < N_cells; i++) {
+    lambda(i) = pp_cell_area * exp(mu + log_lambda_spat(i));
     nll(1) -= dpois(pp_counts(i), lambda(i), true);
   }
 
@@ -84,6 +83,13 @@ Type objective_function<Type>::operator() ()
   REPORT(lambda);
   // REPORT(quad_lambda);
   // REPORT(log_lambda);
+
+  Type sigma;
+  sigma = sqrt(1 / (4 * PI * kappa2));
+  Type rho;
+  rho = sqrt(8 / kappa2);
+  ADREPORT(sigma);
+  ADREPORT(rho);
 
   return nll.sum();
 }
