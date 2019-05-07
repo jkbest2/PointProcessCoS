@@ -1,0 +1,41 @@
+---
+title: Point process change of support
+output:
+  pdf_document:
+    fig_caption: true
+---
+
+\(\renewcommand{\vec}[1]{\boldsymbol{#1}}\)
+
+In some cases we may have information on different scales that can inform our estimates of parameters of interest such as abundance. For these to inform our model, we need to relate them to a common underlying process. In the statistics literature, this is known as a *change of support* problem. For example, we may have estimates of expected number of individuals within an area as well as a mapping of the locations of individuals within different sub-areas. 
+
+In this case we consider a change of support that will allow us to combine information on individual locations with information on areal abundance estimates. In order to do this, we model the abundance intensity as a continuous process across the domain. The areal observation process involves integrating across the relevant area.
+
+We denote the area of interest \(\Omega\). Within this domain we consider the locations of individuals to be random, with some areas used more intensely than others. This is known as an inhomogeneous Poisson process, and we model it using a log-Gaussian Cox process (LGCP). Note that for simplicity we do not include the detection and sampling processes here. The log-Gaussian Cox process is defined by an intensity function $\Lambda(s)$, so that
+
+\[\log \Lambda(s) = \vec{X}\vec{\Beta} + \omega(s),\]
+
+where $\vec{X}(s)\vec{Beta}$ informs the expected log-intensity through
+covariates $\vec{X}$. Here we simplify to a constant global mean. The second term, \(\omega(s)\), is a Gaussian random field with mean zero and precision matrix \(\vec{Q}\). The Gaussian random field can account for variation that is not explained by the included covariates.
+
+Here we look at the case of combining 
+
+We can estimate \(\Lambda(s)\) by dividing the domain into small polygons, which we will call the $\omega_i$, each of which has area \(a_i\). Then the number of points that fall within each \(\omega_i\) is distributed as
+
+\[n_i \sim \operatorname{Poisson}\left(\int_{\omega_i} \Lambda(s) ds \right).\]
+
+To change our level observation to the entire area, we need to calculate the total expected number of individuals observed. This is the integral
+
+\[\Lambda_{tot} = \int_\Omega \Lambda(s) ds\]
+
+so that we have
+
+\[N_t \sim \operatorname{Poisson}(\Lambda_{tot}).\]
+
+It is also possible to include any error associated with the estimate of \(N_t\), but this is omitted for the sake of illustration.
+
+By paying attention to the scale that our observations are taken at, we can reconstruct the intensity of spatial habitat use. Compare the model used to simulate the data (left) with the fitted surface (right).
+
+```{r echo=FALSE, fig.cap="The true intensity surface (a) with the quadrats and observed points marked, and the fitted surface (b) which also includes our information about the total expected abundance withing this domain."}
+knitr::include_graphics("ppcos_plot.pdf")
+```
