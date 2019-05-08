@@ -5,22 +5,24 @@ output:
     fig_caption: true
 ---
 
-\(\renewcommand{\vec}[1]{\boldsymbol{#1}}\)
+$\renewcommand{\vec}[1]{\boldsymbol{#1}}$
 
-In some cases we may have information on different scales that can inform our estimates of parameters of interest such as abundance. For these to inform our model, we need to relate them to a common underlying process. In the statistics literature, this is known as a *change of support* problem. For example, we may have estimates of expected number of individuals within an area as well as a mapping of the locations of individuals within different sub-areas. 
+In some cases we may have information on different scales that can inform our estimates of parameters of interest such as abundance. For these to inform our model, we need to relate them to a common underlying process. In the statistics literature, this is known as a *change of support* problem (Gotway and Young 2002). A simple case occurs when it can be assumed that abundance scales linearly with area, in which case an offset can account for different areas. In a spatially explicit model we account for spatial correlation between observations, but we may also need to account for observations that take place over different geometries. For example, we may have estimates of the total abundance of an area, as well as observations of individual locations within subareas.
 
-In this case we consider a change of support that will allow us to combine information on individual locations with information on areal abundance estimates. In order to do this, we model the abundance intensity as a continuous process across the domain. The areal observation process involves integrating across the relevant area.
+The general strategy in change of support problems is to model the process at as fine a scale as possible, and then consider areal observations as integrals over a subarea. Here we model the abundance intensity ($N(s)$) as a continuous process across the domain. This allows direct modeling of the point process. Total abundance estimates, being observed over the entire domain, depend on the integral of the abundance intensity over the domain.
 
-We denote the area of interest \(\Omega\). Within this domain we consider the locations of individuals to be random, with some areas used more intensely than others. This is known as an inhomogeneous Poisson process, and we model it using a log-Gaussian Cox process (LGCP). Note that for simplicity we do not include the detection and sampling processes here. The log-Gaussian Cox process is defined by an intensity function $\Lambda(s)$, so that
+We denote the domain of interest \(\Omega\). Within this area we consider the locations of individuals to be random, with some areas used more intensely than others. This is known as an inhomogeneous Poisson process, and we model it using a log-Gaussian Cox process (LGCP). Note that for simplicity we do not include the detection and sampling processes here. The log-Gaussian Cox process is defined by an intensity function $\Lambda(s)$, so that
 
-\[\log \Lambda(s) = \vec{X}\vec{\Beta} + \omega(s),\]
+\[\log \Lambda(s) = \vec{X}\vec{\beta} + \epsilon(s),\]
 
-where $\vec{X}(s)\vec{Beta}$ informs the expected log-intensity through
-covariates $\vec{X}$. Here we simplify to a constant global mean. The second term, \(\omega(s)\), is a Gaussian random field with mean zero and precision matrix \(\vec{Q}\). The Gaussian random field can account for variation that is not explained by the included covariates.
+where $\vec{X}(s)\vec{\beta}$ informs the expected log-intensity through
+covariates $\vec{X}$. Here we simplify to a constant global mean. The second term, \(\epsilon(s)\), is a Gaussian random field with mean zero and precision matrix \(\vec{Q}\), so that
 
-Here we look at the case of combining 
+$$\vec{\epsilon} \sim \operatorname{MVN}\left( \vec{0}, \vec{Q}^{-1} \right).$$
 
-We can estimate \(\Lambda(s)\) by dividing the domain into small polygons, which we will call the $\omega_i$, each of which has area \(a_i\). Then the number of points that fall within each \(\omega_i\) is distributed as
+The Gaussian random field can account for variation that is not explained by the included covariates.
+
+Computationally, we must deal with a finite representation of $\Lambda(s)$. We divide $\Omega$ into small polygons, which we will call the $\omega_i$. Each $\omega_i$ has area \(a_i\). The number of points that fall within each \(\omega_i\) is distributed as
 
 \[n_i \sim \operatorname{Poisson}\left(\int_{\omega_i} \Lambda(s) ds \right).\]
 
@@ -32,10 +34,13 @@ so that we have
 
 \[N_t \sim \operatorname{Poisson}(\Lambda_{tot}).\]
 
-It is also possible to include any error associated with the estimate of \(N_t\), but this is omitted for the sake of illustration.
+This gives a likelihood
 
-By paying attention to the scale that our observations are taken at, we can reconstruct the intensity of spatial habitat use. Compare the model used to simulate the data (left) with the fitted surface (right).
+$$\mathcal{L}\left( \vec{N}, \vec{n}; \vec{\beta}, \vec{\epsilon} \right) =
+  \prod_t p(N_t) \prod_i p(n_t) p(\vec{\epsilon}),$$
+  
+where each $p(\cdot)$ is the density function of the distributions defined above. By paying attention to the scale that our observations are taken at, we can reconstruct the intensity of spatial habitat use. Compare the model used to simulate the data (left) with the fitted surface (right). Including the point observations allows us to see more of the spatial structure than if we had used only the estimate of total abundance.
 
-```{r echo=FALSE, fig.cap="The true intensity surface (a) with the quadrats and observed points marked, and the fitted surface (b) which also includes our information about the total expected abundance withing this domain."}
+```{r echo=FALSE, fig.cap="The true intensity surface (a) with the observed polygons points marked, and the fitted surface (b) which also includes our information about the total expected abundance withing this domain."}
 knitr::include_graphics("ppcos_plot.pdf")
 ```
