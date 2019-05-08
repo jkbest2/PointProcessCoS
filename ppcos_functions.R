@@ -1,3 +1,7 @@
+## Make a Polygon from a vector of coordinates.
+make_poly <- function(x) {
+  Polygon(matrix(x, ncol = 2, byrow = TRUE))
+}
 
 ## Function to generate a Polygon of a block from the lower-left corner
 block_poly <- function(ll, w = 25) {

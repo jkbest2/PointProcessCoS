@@ -120,14 +120,10 @@ mesh_dual <- book.mesh.dual(mesh)
 ## n_blocks <- 5L
 ## List of the lower-left corner coordinates for the blocks, to generate the
 ## coordinates of all possible blocks.
-block_ll <- seq(0, 75, 25)
-blocks <- cross2(block_ll, block_ll) %>%
-  map(lift(c)) %>%
-  map(block_poly)
-
-make_poly <- function(x) {
-  Polygon(matrix(x, ncol = 2, byrow = TRUE))
-}
+## block_ll <- seq(0, 75, 25)
+## blocks <- cross2(block_ll, block_ll) %>%
+##   map(lift(c)) %>%
+##   map(block_poly)
 
 polys <- list(make_poly(c(10, 85,
                           25, 90,
@@ -182,15 +178,11 @@ dual_wts <- get_wts(pp_dom_poly, mesh_dual)
 
 ###=============================================================================
 ### Fit the model --------------------------------------------------------------
-
-## pmarg_range <- qpois(c(0.05, 0.995), sum(attr(pp1, "Lambda")$v))
-## pmarg_vec <- pmarg_range[1]:pmarg_range[2]
-## N_pmarg <- length(pmarg_vec)
-
 data <- list(N_vertices = mesh$n,
              quadrat_count = quad_counts,
              quadrat_exposure = quad_wts,
              dual_exposure = dual_wts,
+             use_areal = 1L,
              area_est = area_est,
              ## area_sd = area_sd,
              ## N_pmarg = N_pmarg,
@@ -213,6 +205,36 @@ h <- optimHess(fit$par, obj$fn, obj$gr)
 
 rep <- obj$report()
 sdr <- sdreport(obj)
+
+###=============================================================================
+### Fit the model with NO areal observation ------------------------------------
+dat2 <- list(N_vertices = mesh$n,
+             quadrat_count = quad_counts,
+             quadrat_exposure = quad_wts,
+             dual_exposure = dual_wts,
+             use_areal = 0L,
+             area_est = area_est,
+             ## area_sd = area_sd,
+             ## N_pmarg = N_pmarg,
+             ## pmarg_range = pmarg_vec,
+             Q = spde_Q)
+par2 <- list(mu = mu,
+             spat = rep(0, mesh$n))
+
+## compile("ppcos_quads.cpp")
+## dyn.load(dynlib("ppcos_quads"))
+
+ob2 <- MakeADFun(dat2, par2,
+                 random = "spat",
+                 DLL = "ppcos_quads")
+
+fi2 <- optim(ob2$par, ob2$fn, ob2$gr, method = "BFGS",
+             control = list(maxit = 1000L))
+
+h2 <- optimHess(fi2$par, ob2$fn, ob2$gr)
+
+re2 <- obj$report()
+sd2 <- sdreport(ob2)
 
 ###=============================================================================
 ### Figures etc. ---------------------------------------------------------------

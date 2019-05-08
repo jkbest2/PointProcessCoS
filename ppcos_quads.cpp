@@ -19,6 +19,7 @@ Type objective_function<Type>::operator() ()
   DATA_VECTOR(quadrat_exposure);   // Area of a cell/quadrat intersection
 
   // Areal observations
+  DATA_INTEGER(use_areal);         // Use areal (1) or not (0)?
   DATA_VECTOR(dual_exposure);      // Area of each dual mesh polygon
   DATA_SCALAR(area_est);           // Estimate of total area abundance
   // DATA_SCALAR(area_sd);            // Std. deviation of area abundance estimate
@@ -70,7 +71,10 @@ Type objective_function<Type>::operator() ()
   // Use a simple zeroth-order numerical integration to get the likelihood of
   // the total abundance estimate given the current intensity map.
   tot_intens = lambda.sum();
-  nll(2) -= dpois(area_est, tot_intens);
+  if (use_areal) {
+    nll(2) -= dpois(area_est, tot_intens);
+  }
+
   // Below uses a log-normal error distribution of total abundance estimate,
   // manually marginalizing out Poisson distribution over possible actual
   // abundances.
