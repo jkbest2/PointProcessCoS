@@ -13,26 +13,23 @@ Type objective_function<Type>::operator() ()
 {
   DATA_INTEGER(N_vertices);        // Vertices in mesh
 
+  // Covariate values at each mesh vertex
+  DATA_MATRIX(X)
+
   // Observed point process
   DATA_VECTOR(quadrat_count);      // Number of points in the intersection of
                                    // each dual mesh cell and quadrat
   DATA_VECTOR(quadrat_exposure);   // Area of a cell/quadrat intersection
 
   // Areal observations
-  DATA_INTEGER(use_areal);         // Use areal (1) or not (0)?
   DATA_VECTOR(dual_exposure);      // Area of each dual mesh polygon
   DATA_SCALAR(area_est);           // Estimate of total area abundance
-  // DATA_SCALAR(area_sd);            // Std. deviation of area abundance estimate
-  // DATA_INTEGER(N_pmarg);           // Number of values to use in marginalizing
-  //                                  // Poisson
-  // DATA_VECTOR(pmarg_range);        // Vector of values to use to integrate out
-                                   // Poisson total abundance
 
   // Pass spatial precision matrix as data in order to simplify and speed up
   // estimation
   DATA_SPARSE_MATRIX(Q);
 
-  PARAMETER(mu);                   // Mean log-density
+  PARAMETER_VECTOR(beta);                   // Mean log-density
   PARAMETER_VECTOR(spat);          // Spatial random effect
 
   // Initialize negative log-likelihood vector, where nll(0) is the areal
@@ -50,13 +47,17 @@ Type objective_function<Type>::operator() ()
   // method at the end converts the 1×1 matrix to a scalar value.
   nll(0) = (spat.matrix().transpose() * Q * spat.matrix()).value();
 
+  // Get the mean vector using the design matrix and the betas
+  vector<Type> mu(N_vertices);
+  mu = X * beta;
+
   // Likelihood of partially observed (within quadrats) point process
   vector<Type> quad_lambda(N_vertices);
   for (int i = 0; i < N_vertices; i++) {
     // Calculate the expected Poisson rate within each quadrat/dual mesh
     // intersected polygon, then add the effect to the likelihood of it was
     // observed (intersected area greater than zero).
-    quad_lambda(i) = quadrat_exposure(i) * exp(mu + spat(i));
+    quad_lambda(i) = quadrat_exposure(i) * exp(mu(i) + spat(i));
     if (quadrat_exposure(i) > 0) {
       nll(1) -= dpois(quadrat_count(i), quad_lambda(i), true);
     }
@@ -65,23 +66,13 @@ Type objective_function<Type>::operator() ()
   // Calculate the total intensity for each dual mesh polygon.
   vector<Type> lambda(N_vertices);
   for (int i = 0; i < N_vertices; i++) {
-    lambda(i) = dual_exposure(i) * exp(mu + spat(i));
+    lambda(i) = dual_exposure(i) * exp(mu(i) + spat(i));
   }
   Type tot_intens;
   // Use a simple zeroth-order numerical integration to get the likelihood of
   // the total abundance estimate given the current intensity map.
   tot_intens = lambda.sum();
-  if (use_areal) {
-    nll(2) -= dpois(area_est, tot_intens);
-  }
-
-  // Below uses a log-normal error distribution of total abundance estimate,
-  // manually marginalizing out Poisson distribution over possible actual
-  // abundances.
-  // for (int j = 0; i < N_pmarg; i++) {
-  //   nll(2) -= dpois(pmarg_range(j), tot_intens, true) +
-  //     dlnorm(area_est, log(pmarg_range(j)), area_sd, true);
-  // }
+  nll(2) -= dpois(area_est, tot_intens);
 
   REPORT(mu);
   REPORT(spat);

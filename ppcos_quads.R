@@ -18,10 +18,10 @@ library(TMB)
 set.seed(1221)
 
 ## Intermediate plots?
-inter_plots <- FALSE
+inter_plots <- TRUE
 
-###=============================================================================
-### Simulate data --------------------------------------------------------------
+### ============================================================================
+### Define domain --------------------------------------------------------------
 ## Use a window that is 100×100. Create an owin object for the `rLGCP` function,
 ## and an `sp::SpatialPolygons` object for masking later.
 xrange <- yrange <- c(0, 100)
@@ -34,45 +34,7 @@ pp_domain <- matrix(c(xrange[1], yrange[1],
                     ncol = 2L, byrow = TRUE)
 pp_dom_poly <- SpatialPolygons(list(Polygons(list(Polygon(pp_domain)), "0")))
 
-## Generate a log-Gaussian Cox process realization. Save the intensity surface.
-## This intensity surface is what we are ultimately trying to make inference on.
-rho = 50
-sigma2 = 1 ^ 2
-## Convert to the Matérn parameterization used by INLA
-kappa2 <- 8 / rho ^ 2
-tau <- sqrt(4 * pi * kappa2 * sigma2)
-## Want to make the underlying mean high enough that we have lots of points.
-## Otherwise our point process data won't be very informative. For mu = -2, we
-## expect to see exp(-3) * 100^2 = 498 points.
-mu = -2
-## Set nu = 1; this corresponds to alpha = 2 in the SPDE formulation.
-pp1 <- rLGCP(model = "matern", nu = 1,
-             mu = mu, var = sigma2, scale = rho,
-             win = ppwin, eps = 1, saveLambda = TRUE)
-## Extract the point process locations as different objects
-pp_sp <- data.frame(pp1)
-coordinates(pp_sp) <- c("x", "y")
-## Total number of points
-n_pp <- pp1$n
-
-### Simulate the area-wide estimate
-## area_cv <- 0.25
-## area_sd <- sqrt(log(area_cv ^ 2 + 1))
-## area_est <- rlnorm(1, log(sum(attr(pp1, "Lambda")$v)), area_sd)
-area_est <- rpois(1, sum(attr(pp1, "Lambda")$v))
-
-###=============================================================================
-### Prepare data and mesh ------------------------------------------------------
-
-### This follows the outline of an example set forth in *Advanced Spatial
-### Modeling with Stochastic Partial Differential Equations Using R and INLA*
-### Chapter 4, available here:
-### (https://becarioprecario.bitbucket.io/spde-gitbook/ch-lcox.html). It follows
-### Simpson 2016 (https://doi.org/10.1093/biomet/asv064) to construct an
-### efficient representation of the log-Gaussian Cox process by using the dual
-### of the mesh that is constructed when using the SPDE representation of the
-### Matern spatial field.
-
+### Define mesh ----------------------------------------------------------------
 ## Generate mesh for FEM representation of SPDE. The `loc` argument gives a
 ## starting point for the vertex locations, `loc.domain` defines the domain of
 ## the point process, `max.edge` controls the maximum edge lengths in the mesh
@@ -96,35 +58,106 @@ if (inter_plots) {
   ggplot() +
     gg(mesh) +
     gg(pp_dom_poly) +
-    gg(pp_sp, alpha = 0.5) +
     coord_fixed()
 }
 
-## Because we are estimating using maximum likelihood here, it doesn't really
-## matter whether we use `inla.spde2.pcmatern` or `inla.spde2.matern` to
-## construct the SPDE object that we use to get a precision matrix.
-spde <- inla.spde2.pcmatern(mesh = mesh,
-                            prior.range = c(20, 0.01),
-                            prior.sigma = c(5, 0.01))
-## Then specify the precision matrix using the generative parameters from above.
-## This returns a sparse matrix that we can pass to TMB.
-spde_Q <- inla.spde2.precision(spde,
-                               theta = c(log(rho), log(sqrt(sigma2))))
+## Define pixels for plotting and a projection matrix to those pixels
+pxl <- pixels(mesh, nx = 150, ny = 150, mask = pp_dom_poly)
+pxl_A <- inla.spde.make.A(mesh, pxl)
+pxl_df <- tibble(x = coordinates(pxl)[, 1],
+                 y = coordinates(pxl)[, 2])
 
 ## Create the dual mesh (divide the domain into polygons according to the
 ## closest vertex). This uses the `book.mesh.dual` function `source`d in above.
 mesh_dual <- book.mesh.dual(mesh)
+if (inter_plots) {
+  ggplot() +
+    gg(mesh_dual) +
+    gg(pp_dom_poly)
+}
 
-### Get quadrat partially-observed point process observations sorted
-## Number of quadrats to map the point process
-## n_blocks <- 5L
-## List of the lower-left corner coordinates for the blocks, to generate the
-## coordinates of all possible blocks.
-## block_ll <- seq(0, 75, 25)
-## blocks <- cross2(block_ll, block_ll) %>%
-##   map(lift(c)) %>%
-##   map(block_poly)
+### ============================================================================
+### Generate a spatially varying covariate -------------------------------------
+cov_rho = 75
+cov_sigma2 = 1 ^ 2
+spde <- inla.spde2.pcmatern(mesh = mesh,
+                            prior.range = c(20, 0.01),
+                            prior.sigma = c(5, 0.01))
+cov_Q <- inla.spde2.precision(spde,
+                              theta = c(log(cov_rho),
+                                        log(sqrt(cov_sigma2))))
+spat_cov <- backsolve(chol(cov_Q), rnorm(n_vert))
 
+## Create design matrix for covariate effect (at each vertex location)
+X <- cbind(rep(1, n_vert), spat_cov)
+
+if (inter_plots) {
+  pxl_df %>%
+    mutate(covar = (pxl_A %*% spat_cov)[, 1]) %>%
+    ggplot(aes(x = x, y = y, fill = covar)) +
+    geom_tile() +
+    scale_fill_viridis_c(option = "E") +
+    coord_fixed()
+}
+
+## Calculate true mean vector
+mu_pxl <- (-3.0 + 1 * pxl_A %*% spat_cov)[, 1]
+## Convert to "im" object for `rLGCP` below
+mu_im <- as.im(matrix(mu_pxl,
+                      nrow = 100, ncol = 100,
+                      byrow = TRUE),
+               W = ppwin)
+if (inter_plots) {
+  pxl_df %>%
+    mutate(mu = mu_pxl) %>%
+    ggplot(aes(x = x, y = y, fill = mu)) +
+    geom_tile() +
+    scale_fill_viridis_c(option = "E") +
+    coord_fixed()
+}
+
+### ============================================================================
+### Generate point process realization -----------------------------------------
+## Generate a log-Gaussian Cox process realization. Save the intensity surface.
+## This intensity surface is what we are ultimately trying to make inference on.
+## Here I set the range to be much larger than the domain, and the variance to
+## be very small to essentially remove the spatial component, leaving just the
+## mean structure. This simplifies the LGCP to a Cox process to match the rest
+## of the text more closely
+rho <- 500
+sigma2 <- 1e-10 ^2
+spde_Q <- inla.spde2.precision(spde, theta = c(log(rho), log(sqrt(sigma2))))
+## Convert to the Matérn parameterization used by INLA
+kappa2 <- 8 / rho ^ 2
+tau <- sqrt(4 * pi * kappa2 * sigma2)
+## Want to make the underlying mean high enough that we have lots of points.
+## Otherwise our point process data won't be very informative. For mu = -2, we
+## expect to see exp(-3) * 100^2 = 498 points.
+## mu <- -2
+## mu <- function(x, y) -3.25 + 0.02 * y + 0.02 * x
+## Set nu = 1; this corresponds to alpha = 2 in the SPDE formulation.
+pp1 <- rLGCP(model = "matern", nu = 1,
+             mu = mu_im, var = sigma2, scale = rho,
+             win = ppwin, eps = 1, saveLambda = TRUE)
+## Extract the point process locations as different objects
+pp_sp <- data.frame(pp1)
+coordinates(pp_sp) <- c("x", "y")
+## Total number of points
+n_pp <- pp1$n
+
+if (inter_plots) {
+  image(attr(pp1, "Lambda"))
+  points(pp1)
+}
+
+### Simulate the area-wide estimate
+## area_cv <- 0.25
+## area_sd <- sqrt(log(area_cv ^ 2 + 1))
+## area_est <- rlnorm(1, log(sum(attr(pp1, "Lambda")$v)), area_sd)
+area_est <- rpois(1, sum(attr(pp1, "Lambda")$v))
+
+### Get partially-observed point process observations sorted. Use arbitrary
+### polygons to illustrate flexibility of approach.
 polys <- list(make_poly(c(10, 85,
                           25, 90,
                           35, 80,
@@ -151,22 +184,14 @@ polys <- list(make_poly(c(10, 85,
                           35, 35,
                           15, 15)))
 
-## Choose a sample of quadrats from within the coarse 16×16 grid, then get the
-## dual mesh areas within each quadrat and the point counts within each dual
-## mesh/quadrat intersection. These are used to calculate the likelihood of the
-## partially observed point process.
-## quad_poly <- blocks[c(10)]
-## quad_poly <- append(quad_poly, irr_poly)
-
-## sp <- SpatialPolygons(c(list(Polygons(irr_poly, "irr_quads")),
-##                         list(Polygons(quad_poly, "reg_quads"))))
 poly_sp <- SpatialPolygons(list(Polygons(polys, "polys")))
-ggplot() +
-  gg(mesh) +
-  gg(pp_dom_poly) +
-  gg(poly_sp)
+if (inter_plots) {
+  ggplot() +
+    gg(mesh) +
+    gg(pp_dom_poly) +
+    gg(poly_sp)
+}
 
-## quadrat_sp <- SpatialPolygons(list(Polygons(quad_poly, "quadrats")))
 quadrat_sp <- poly_sp
 quad_wts <- get_wts(quadrat_sp, mesh_dual)
 quad_counts <- count_points(pp_sp, mesh_dual, quadrat_sp)
@@ -179,23 +204,20 @@ dual_wts <- get_wts(pp_dom_poly, mesh_dual)
 ###=============================================================================
 ### Fit the model --------------------------------------------------------------
 data <- list(N_vertices = mesh$n,
+             X = X,
              quadrat_count = quad_counts,
              quadrat_exposure = quad_wts,
              dual_exposure = dual_wts,
-             use_areal = 1L,
              area_est = area_est,
-             ## area_sd = area_sd,
-             ## N_pmarg = N_pmarg,
-             ## pmarg_range = pmarg_vec,
              Q = spde_Q)
-pars <- list(mu = mu,
+pars <- list(beta = c(-3.0, 1.0),
              spat = rep(0, mesh$n))
 
 compile("ppcos_quads.cpp")
 dyn.load(dynlib("ppcos_quads"))
 
 obj <- MakeADFun(data, pars,
-                 random = "spat",
+                 map = list(spat = factor(rep(NA, n_vert))),
                  DLL = "ppcos_quads")
 
 fit <- optim(obj$par, obj$fn, obj$gr, method = "BFGS",
@@ -207,36 +229,6 @@ rep <- obj$report()
 sdr <- sdreport(obj)
 
 ###=============================================================================
-### Fit the model with NO areal observation ------------------------------------
-dat2 <- list(N_vertices = mesh$n,
-             quadrat_count = quad_counts,
-             quadrat_exposure = quad_wts,
-             dual_exposure = dual_wts,
-             use_areal = 0L,
-             area_est = area_est,
-             ## area_sd = area_sd,
-             ## N_pmarg = N_pmarg,
-             ## pmarg_range = pmarg_vec,
-             Q = spde_Q)
-par2 <- list(mu = mu,
-             spat = rep(0, mesh$n))
-
-## compile("ppcos_quads.cpp")
-## dyn.load(dynlib("ppcos_quads"))
-
-ob2 <- MakeADFun(dat2, par2,
-                 random = "spat",
-                 DLL = "ppcos_quads")
-
-fi2 <- optim(ob2$par, ob2$fn, ob2$gr, method = "BFGS",
-             control = list(maxit = 1000L))
-
-h2 <- optimHess(fi2$par, ob2$fn, ob2$gr)
-
-re2 <- obj$report()
-sd2 <- sdreport(ob2)
-
-###=============================================================================
 ### Figures etc. ---------------------------------------------------------------
 
 pp_sp$obs <- ifelse(is.na(over(pp_sp, quadrat_sp)),
@@ -244,51 +236,49 @@ pp_sp$obs <- ifelse(is.na(over(pp_sp, quadrat_sp)),
 
 pxl <- pixels(mesh, nx = 150, ny = 150, mask = pp_dom_poly)
 pxl_A <- inla.spde.make.A(mesh, pxl)
-lin_est <- (rep$mu + pxl_A %*% rep$spat)[, 1]
+lin_est <- (pxl_A %*% (rep$mu + rep$spat))[, 1]
 ## To get the standard deviation of the linear predictor at each pixel location,
 ## we take the diagonal of A Sigma A', add the variance of the mean, and then
 ## take the diagonal. This gives the variance of each pixel, which we take the
 ## square root of.
-lin_sd <- sqrt(diag(pxl_A %*% Diagonal(x = sdr$diag.cov.random) %*% t(pxl_A)) +
-               sdr$cov.fixed[1, 1])
+## lin_sd <- sqrt(diag(pxl_A %*% Diagonal(x = sdr$diag.cov.random) %*% t(pxl_A)) +
+##                sdr$cov.fixed[1, 1])
 lam_est <- exp(lin_est)
 
 res_df <- tibble(x = coordinates(pxl)[, 1],
                  y = coordinates(pxl)[, 2],
+                 covar = mu_pxl,
                  lin_est = lin_est,
-                 lin_sd = lin_sd,
+                 ## lin_sd = lin_sd,
                  lam_est = lam_est,
                  lam_true = c(t(attr(pp1, "Lambda")$v)),
                  lam_diff = lam_est - lam_true,
                  lin_diff = lin_est - log(lam_true))
 
-## Left plot, true surface with observations
-true_plot <- ggplot(res_df, aes(x = x, y = y)) +
-  geom_tile(aes(fill = lam_true)) +
-  scale_fill_viridis_c(option = "D", limits = c(0.01, 0.91)) +
-  coord_fixed() +
-  geom_point(data = as.data.frame(pp_sp[pp_sp$obs, ]),
-             alpha = 0.5, size = 0.2) +
-  geom_path(data = fortify(quadrat_sp),
-            aes(x = long, y = lat, group = group),
-            alpha = 0.5) +
-  labs(fill = expression(Lambda(s)),
-       title = "(a)") +
+covar_plot <- ggplot(res_df, aes(x = x, y = y)) +
+  geom_tile(aes(fill = covar)) +
+  scale_fill_viridis(option = "A") +
+  labs(title = "(a)") +
   guides(fill = FALSE) +
   theme_minimal() +
   theme(axis.title = element_blank(),
         axis.text = element_blank(),
         panel.grid = element_blank())
 
-## Right plot, reconstructed surface
-est_plot <- ggplot(res_df, aes(x = x, y = y)) +
-  geom_tile(aes(fill = lam_est)) +
-  scale_fill_viridis_c(option = "D", limits = c(0.01, 0.91)) +
+## Get min and max values of lambda, both true and fitted to use to set limits
+## on the color scale
+col_lims <- c(min(c(res_df$lam_est, res_df$lam_true)),
+              max(c(res_df$lam_est, res_df$lam_true)))
+
+## Left plot, true surface with observations
+true_plot <- ggplot(res_df, aes(x = x, y = y)) +
+  geom_tile(aes(fill = lam_true)) +
+  scale_fill_viridis_c(option = "D", limits = col_lims) +
   coord_fixed() +
-  ## geom_point(data = as.data.frame(pp_sp[pp_sp$obs, ]),
-  ##            alpha = 0.5) +
+  geom_point(data = as.data.frame(pp_sp[pp_sp$obs, ]),
+             alpha = 0.5, size = 0.2) +
   geom_path(data = fortify(quadrat_sp),
-            aes(x = long, y = lat, group = group, fill = NULL),
+            aes(x = long, y = lat, group = group),
             alpha = 0.5) +
   labs(fill = expression(Lambda(s)),
        title = "(b)") +
@@ -298,9 +288,28 @@ est_plot <- ggplot(res_df, aes(x = x, y = y)) +
         axis.text = element_blank(),
         panel.grid = element_blank())
 
-combo_plot <- grid.arrange(true_plot, est_plot, ncol = 2)
+## Right plot, reconstructed surface
+est_plot <- ggplot(res_df, aes(x = x, y = y)) +
+  geom_tile(aes(fill = lam_est)) +
+  scale_fill_viridis_c(option = "D", limits = col_lims) +
+  coord_fixed() +
+  ## geom_point(data = as.data.frame(pp_sp[pp_sp$obs, ]),
+  ##            alpha = 0.5) +
+  geom_path(data = fortify(quadrat_sp),
+            aes(x = long, y = lat, group = group, fill = NULL),
+            alpha = 0.5) +
+  labs(fill = expression(Lambda(s)),
+       title = "(c)") +
+  guides(fill = FALSE) +
+  theme_minimal() +
+  theme(axis.title = element_blank(),
+        axis.text = element_blank(),
+        panel.grid = element_blank())
 
-ggsave("ppcos_plot.pdf", combo_plot, width = 6, height = 4)
+combo_plot <- grid.arrange(covar_plot, true_plot, est_plot,
+                           nrow = 2, ncol = 2)
+
+ggsave("ppcos_plot.png", combo_plot, width = 6, height = 6)
 
 ## Alternate plots -------------------------------------------------------------
 ggplot(res_df, aes(x = x, y = y)) +
@@ -331,13 +340,13 @@ ggplot(res_df, aes(x = x, y = y, fill = lin_sd)) +
   geom_path(data = fortify(quadrat_sp),
             aes(x = long, y = lat, group = group, fill = NULL))
 
-ggplot(res_df, aes(x = x, y = y)) +
-  geom_tile(aes(fill = lin_diff)) +
-  ## scale_fill_viridis_c( option = "E") +
-  scale_fill_distiller(type = "div",
-                       limits = c(-2.5, 2.5)) +
-  coord_fixed() +
-  geom_path(data = fortify(quadrat_sp),
-            aes(x = long, y = lat, group = group)) +
-  geom_contour(aes(z = lin_diff), breaks = seq(-2, 2, 0.5))
+## ggplot(res_df, aes(x = x, y = y)) +
+##   geom_tile(aes(fill = lin_diff)) +
+##   ## scale_fill_viridis_c( option = "E") +
+##   scale_fill_distiller(type = "div",
+##                        limits = c(-2.5, 2.5)) +
+##   coord_fixed() +
+##   geom_path(data = fortify(quadrat_sp),
+##             aes(x = long, y = lat, group = group)) +
+##   geom_contour(aes(z = lin_diff), breaks = seq(-2, 2, 0.5))
 
