@@ -208,16 +208,13 @@ data <- list(N_vertices = mesh$n,
              quadrat_count = quad_counts,
              quadrat_exposure = quad_wts,
              dual_exposure = dual_wts,
-             area_est = area_est,
-             Q = spde_Q)
-pars <- list(beta = c(-3.0, 1.0),
-             spat = rep(0, mesh$n))
+             area_est = area_est)
+pars <- list(beta = c(-3.0, 1.0))
 
 compile("ppcos_quads.cpp")
 dyn.load(dynlib("ppcos_quads"))
 
 obj <- MakeADFun(data, pars,
-                 map = list(spat = factor(rep(NA, n_vert))),
                  DLL = "ppcos_quads")
 
 fit <- optim(obj$par, obj$fn, obj$gr, method = "BFGS",
