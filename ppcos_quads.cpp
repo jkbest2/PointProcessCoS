@@ -12,9 +12,10 @@ template<class Type>
 Type objective_function<Type>::operator() ()
 {
   DATA_INTEGER(N_vertices);        // Vertices in mesh
+  DATA_INTEGER(N_areal);           // Number of areal observations
 
-  // Covariate values at each mesh vertex
-  DATA_MATRIX(X)
+  // Intercept and covariate values at each mesh vertex
+  DATA_MATRIX(X);
 
   // Observed point process
   DATA_VECTOR(quadrat_count);      // Number of points in the intersection of
@@ -22,10 +23,12 @@ Type objective_function<Type>::operator() ()
   DATA_VECTOR(quadrat_exposure);   // Area of a cell/quadrat intersection
 
   // Areal observations
-  DATA_VECTOR(dual_exposure);      // Area of each dual mesh polygon
-  DATA_SCALAR(area_est);           // Estimate of total area abundance
+  DATA_MATRIX(area_exposure);      // Area of each mesh polygon
+  DATA_VECTOR(area_est);           // Areal expected abundance estimates
 
-  PARAMETER_VECTOR(beta);          // Mean log-density
+  DATA_VECTOR(exposure);           // Area of each small polygon to get total
+
+  PARAMETER_VECTOR(beta);          // Intercept and covariate effect(s)
 
   // Initialize negative log-likelihood vector, where nll(0) is the areal
   // observation likelihood, nll(1) is the point process likelihood, and nll(2)
@@ -50,15 +53,29 @@ Type objective_function<Type>::operator() ()
   }
 
   // Calculate the total intensity for each dual mesh polygon.
+  vector<Type> area_lambda(N_areal);
+  area_lambda.setZero();
+  for (int j = 0; j < N_areal; j++) {
+    for (int i = 0; i < N_vertices; i++) {
+      if (area_exposure(i, j) > 0) {
+        area_lambda(j) += area_exposure(i, j) * exp(mu(i));
+      }
+    }
+    nll(1) -= dpois(area_est(j), area_lambda(j), true);
+  }
+
   vector<Type> lambda(N_vertices);
   for (int i = 0; i < N_vertices; i++) {
-    lambda(i) = dual_exposure(i) * exp(mu(i));
+    if (exposure(i) > 0) {
+      lambda(i) = exposure(i) * exp(mu(i));
+    } else {
+      lambda(i) = 0;
+    }
   }
   Type tot_intens;
   // Use a simple zeroth-order numerical integration to get the likelihood of
   // the total abundance estimate given the current intensity map.
   tot_intens = lambda.sum();
-  nll(1) -= dpois(area_est, tot_intens);
 
   REPORT(mu);
   REPORT(lambda);

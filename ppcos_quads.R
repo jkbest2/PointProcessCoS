@@ -4,6 +4,7 @@ library(inlabru)       # More convenient interface to INLA, allows for nonlinear
 library(spatstat)      # Provides rLGCP
 library(RandomFields)  # Defines Matern correlation functions
 library(rgeos)         # Useful for polygon intersections etc.
+library(maptools)
 ## This file provides functions for creating the dual mesh as well as other
 ## conveniences. It is taken from the .zip file available here:
 ## (http://www.r-inla.org/spde-book)
@@ -150,11 +151,41 @@ if (inter_plots) {
   points(pp1)
 }
 
-### Simulate the area-wide estimate
-## area_cv <- 0.25
-## area_sd <- sqrt(log(area_cv ^ 2 + 1))
-## area_est <- rlnorm(1, log(sum(attr(pp1, "Lambda")$v)), area_sd)
-area_est <- rpois(1, sum(attr(pp1, "Lambda")$v))
+### Simulate the areal estimates. Define polygons to use, get the total
+### intensity within that polygon, then simulates Poisson observations.
+area_poly_list <- list(
+  make_poly(c(0, 0,
+              0, 50,
+              50, 50,
+              50, 0,
+              0, 0)),
+  make_poly(c(50, 0,
+              50, 50,
+              100, 50,
+              100, 0,
+              50, 0)),
+  make_poly(c(0, 50,
+              0, 100,
+              50, 100,
+              50, 50,
+              0, 50)),
+  make_poly(c(50, 50,
+              50, 100,
+              100, 100,
+              100, 50,
+              50, 50)))
+area_polys_list <- lapply(1:length(area_poly_list),
+                          function(idx) Polygons(list(area_poly_list[[idx]]),
+                                                paste0("area", idx)))
+area_poly <- SpatialPolygons(area_polys_list)
+
+intens_sgdf <- as.SpatialGridDataFrame.im(attr(pp1, "Lambda"))
+area_intens <- over(area_poly, intens_sgdf, fn = sum)
+area_est <- rpois(4, area_intens$v)
+area_wts <- vapply(area_polys_list,
+                   function(poly) {
+                     get_wts(SpatialPolygons(list(poly)), mesh_dual = mesh_dual)
+                   }, FUN.VALUE = rep(0.0, n_vert))
 
 ### Get partially-observed point process observations sorted. Use arbitrary
 ### polygons to illustrate flexibility of approach.
@@ -204,10 +235,13 @@ dual_wts <- get_wts(pp_dom_poly, mesh_dual)
 ###=============================================================================
 ### Fit the model --------------------------------------------------------------
 data <- list(N_vertices = mesh$n,
+             N_areal = length(area_poly_list),
              X = X,
              quadrat_count = quad_counts,
              quadrat_exposure = quad_wts,
-             dual_exposure = dual_wts,
+             area_exposure = area_wts,
+             area_est = area_est,
+             exposure = dual_wts,
              area_est = area_est)
 pars <- list(beta = c(-3.0, 1.0))
 
@@ -225,6 +259,29 @@ h <- optimHess(fit$par, obj$fn, obj$gr)
 rep <- obj$report()
 sdr <- sdreport(obj)
 
+### Fit the model with no pp obs ------------------------------------------------
+dat2 <- list(N_vertices = mesh$n,
+             N_areal = length(area_poly_list),
+             X = X,
+             quadrat_count = quad_counts,
+             quadrat_exposure = rep(0.0, mesh$n),
+             area_exposure = area_wts,
+             area_est = area_est,
+             exposure = dual_wts,
+             area_est = area_est)
+pars <- list(beta = c(-3.0, 1.0))
+
+obj2 <- MakeADFun(dat2, pars,
+                  DLL = "ppcos_quads")
+
+fit2 <- optim(obj2$par, obj2$fn, obj2$gr, method = "BFGS",
+              control = list(maxit = 1000L))
+
+h2 <- optimHess(fit2$par, obj2$fn, obj2$gr)
+
+rep2 <- obj2$report()
+sdr2 <- sdreport(obj2)
+
 ###=============================================================================
 ### Figures etc. ---------------------------------------------------------------
 
@@ -233,7 +290,7 @@ pp_sp$obs <- ifelse(is.na(over(pp_sp, quadrat_sp)),
 
 pxl <- pixels(mesh, nx = 150, ny = 150, mask = pp_dom_poly)
 pxl_A <- inla.spde.make.A(mesh, pxl)
-lin_est <- (pxl_A %*% (rep$mu + rep$spat))[, 1]
+lin_est <- (pxl_A %*% (rep$mu))[, 1]
 ## To get the standard deviation of the linear predictor at each pixel location,
 ## we take the diagonal of A Sigma A', add the variance of the mean, and then
 ## take the diagonal. This gives the variance of each pixel, which we take the
